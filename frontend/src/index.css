@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ctx-bg: #0d0d0d;
+  --ctx-card: #141414;
+  --ctx-border: #27272a;
+  --ctx-accent: #22d3ee;
+  --ctx-err: #f87171;
+  --ctx-ok: #4ade80;
+  --ctx-warn: #fbbf24;
+  --ctx-muted: #71717a;
+  --ctx-text: #d4d4d8;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  background-color: var(--ctx-bg);
+  color: var(--ctx-text);
+}
+
+/* Terminal grid lines (subtle) */
+.ctx-grid {
+  background-image: linear-gradient(
+      to right,
+      rgba(39, 39, 42, 0.35) 1px,
+      transparent 1px
+    ),
+    linear-gradient(to bottom, rgba(39, 39, 42, 0.35) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
