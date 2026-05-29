@@ -82,6 +82,7 @@ from contexto.agents.test_generator import (
 )
 from contexto.ingestion.commit_watcher import CommitWatcher
 from contexto.memory.context_store import ContextStore
+from contexto.notifications.slack_notifier import notify_slack
 from live_agent import build_mcp_client, run_tracer
 
 
@@ -152,6 +153,9 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                     continue
 
                 if stored and not failure_seen_before:
+                    if settings.slack_webhook_url:
+                        await notify_slack(settings.slack_webhook_url, _incident_row(trace_map, error))
+
                     await store.upsert_file_context(
                         fp,
                         str(trace_map.get("function", "unknown")),

@@ -11,6 +11,7 @@ ContextO is an AI-powered SRE agent platform that correlates live application er
 | `live_agent.py` | LangGraph ReAct tracer exposed as `run_tracer()` for reuse by the pipeline. |
 | `contexto/pipeline.py` | Long-running orchestration loop: poll logs → trace → store → generate tests → commit guard. |
 | `contexto/memory/context_store.py` | Async `aiosqlite` persistence for `file_context` and `incident_log`. |
+| `contexto/notifications/slack_notifier.py` | Sends a Block Kit Slack message via Incoming Webhook whenever a new bug signature is correlated. |
 
 ## Setup
 
@@ -28,6 +29,7 @@ pip install -r requirements.txt
 - `GITHUB_OWNER`, `GITHUB_REPO` — target repository
 - `GITHUB_PERSONAL_ACCESS_TOKEN` (or `GITHUB_PERSONAL_TOKEN`) — fine-scoped PAT for MCP GitHub server
 - Optional: `LOG_SOURCE_URL` (default `http://127.0.0.1:5000/api/logs`), `POLL_INTERVAL`, `COMMIT_POLL_INTERVAL`, `DB_PATH`, `LLM_MODEL`
+- Optional: `SLACK_WEBHOOK_URL` — Slack Incoming Webhook URL; when set, a Block Kit notification is posted for every new unique bug signature correlated
 
 3. Start the demo app (terminal 1):
 
