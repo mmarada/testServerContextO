@@ -83,6 +83,7 @@ from contexto.agents.test_generator import (
 from contexto.ingestion.commit_watcher import CommitWatcher
 from contexto.memory.context_store import ContextStore
 from contexto.notifications.slack_notifier import notify_slack
+from contexto.severity import classify as classify_severity
 from live_agent import build_mcp_client, run_tracer
 
 
@@ -93,16 +94,24 @@ def _error_type_from_event(error: dict[str, Any]) -> str:
     return msg.split(":", 1)[0].strip()
 
 
-def _incident_row(trace_map: dict[str, Any], error: dict[str, Any]) -> dict[str, Any]:
+def _incident_row(
+    trace_map: dict[str, Any],
+    error: dict[str, Any],
+    error_count: int = 0,
+) -> dict[str, Any]:
+    fp = trace_map["file_path"]
+    error_type = _error_type_from_event(error)
+    severity = classify_severity(fp, error_count, error_type)
     return {
         "incident_id": trace_map["incident_id"],
         "trace_id": trace_map["trace_id"],
         "commit_sha": trace_map.get("commit_sha"),
         "user_action": trace_map.get("user_action", ""),
         "log_trace": trace_map.get("log_trace", ""),
-        "file_path": trace_map["file_path"],
+        "file_path": fp,
         "line_number": int(trace_map["line_number"]),
         "root_cause": trace_map.get("root_cause", ""),
+        "severity": severity,
         "created_at": trace_map.get("created_at") or error.get("timestamp"),
     }
 
@@ -147,14 +156,18 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                 failure_seen_before = await store.incident_exists_for_signature(
                     fp, int(trace_map["line_number"]), error_type
                 )
-                stored = await store.log_incident(_incident_row(trace_map, error))
+                existing_ctx = await store.get_context_for_file(fp)
+                current_error_count = int((existing_ctx or {}).get("error_count", 0))
+                incident = _incident_row(trace_map, error, current_error_count)
+                stored = await store.log_incident(incident)
                 if not stored:
                     print(f"[ContextO] pipeline: incident trace_id={tid} already in DB; skipping")
                     continue
 
                 if stored and not failure_seen_before:
                     if settings.slack_webhook_url:
-                        await notify_slack(settings.slack_webhook_url, _incident_row(trace_map, error))
+                        await notify_slack(settings.slack_webhook_url, incident)
+                    print(f"[ContextO] pipeline: severity={incident['severity']} for {fp}")
 
                     await store.upsert_file_context(
                         fp,

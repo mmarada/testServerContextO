@@ -30,9 +30,14 @@ CREATE TABLE IF NOT EXISTS incident_log (
     file_path TEXT,
     line_number INTEGER,
     root_cause TEXT,
+    severity TEXT DEFAULT 'LOW',
     created_at TEXT
 );
 """
+
+_MIGRATE_SEVERITY = (
+    "ALTER TABLE incident_log ADD COLUMN severity TEXT DEFAULT 'LOW'"
+)
 
 
 def _utc_now_iso() -> str:
@@ -46,6 +51,10 @@ class ContextStore:
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            try:
+                await db.execute(_MIGRATE_SEVERITY)
+            except Exception:  # column already exists
+                pass
             await db.commit()
 
     async def upsert_file_context(
@@ -169,8 +178,8 @@ class ContextStore:
                     """
                     INSERT INTO incident_log (
                         incident_id, trace_id, commit_sha, user_action, log_trace,
-                        file_path, line_number, root_cause, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        file_path, line_number, root_cause, severity, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         incident_dict["incident_id"],
@@ -181,6 +190,7 @@ class ContextStore:
                         incident_dict["file_path"],
                         int(incident_dict["line_number"]),
                         incident_dict.get("root_cause", ""),
+                        incident_dict.get("severity", "LOW"),
                         incident_dict.get("created_at", _utc_now_iso()),
                     ),
                 )

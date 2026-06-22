@@ -6,6 +6,21 @@ function errorType(root) {
   return String(root).split(":")[0].trim() || "—";
 }
 
+const SEV_STYLES = {
+  HIGH: "border border-red-500/60 text-red-400 bg-red-500/10",
+  MEDIUM: "border border-yellow-500/60 text-yellow-400 bg-yellow-500/10",
+  LOW: "border border-green-500/60 text-green-400 bg-green-500/10",
+};
+
+function SeverityBadge({ severity }) {
+  const s = (severity || "LOW").toUpperCase();
+  return (
+    <span className={`inline-block px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${SEV_STYLES[s] || SEV_STYLES.LOW}`}>
+      {s}
+    </span>
+  );
+}
+
 function signatureKey(row) {
   return `${row.file_path}|${row.line_number}|${errorType(row.root_cause)}`;
 }
@@ -86,6 +101,7 @@ export function Incidents({ onViewTrace }) {
           <thead>
             <tr className="border-b border-ctx-border bg-ctx-card text-[10px] uppercase tracking-wide text-ctx-muted">
               <th className="p-2">trace</th>
+              <th className="p-2">severity</th>
               <th className="p-2">file:line</th>
               <th className="p-2">error type</th>
               <th className="p-2">hits</th>
@@ -96,7 +112,7 @@ export function Incidents({ onViewTrace }) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-4 text-ctx-muted">
+                <td colSpan={7} className="p-4 text-ctx-muted">
                   No incidents.
                 </td>
               </tr>
@@ -108,6 +124,9 @@ export function Incidents({ onViewTrace }) {
                 <tr key={r.trace_id} className="border-b border-ctx-border">
                   <td className="p-2 font-mono text-ctx-accent">
                     {(r.trace_id || "").slice(0, 8)}
+                  </td>
+                  <td className="p-2">
+                    <SeverityBadge severity={r.severity} />
                   </td>
                   <td className="p-2 text-ctx-text">
                     {r.file_path}:{r.line_number}

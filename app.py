@@ -362,6 +362,7 @@ def dashboard():
       <thead>
         <tr>
           <th>trace_id</th>
+          <th>severity</th>
           <th>file</th>
           <th>line</th>
           <th>root_cause</th>
@@ -390,15 +391,20 @@ def dashboard():
         fetch('/api/incidents').then(r => r.json()),
         fetch('/api/file-context').then(r => r.json()),
       ]);
+      const SEV_COLOR = { HIGH: '#f87171', MEDIUM: '#fbbf24', LOW: '#4ade80' };
       const ib = document.getElementById('incidents-body');
-      ib.innerHTML = (inc || []).map(r => `
-        <tr>
+      ib.innerHTML = (inc || []).map(r => {
+        const sev = (r.severity || 'LOW').toUpperCase();
+        const color = SEV_COLOR[sev] || SEV_COLOR.LOW;
+        return `<tr>
           <td class="mono">${(r.trace_id || '')}</td>
+          <td class="mono" style="color:${color};font-weight:600">${sev}</td>
           <td class="mono">${(r.file_path || '')}</td>
           <td class="mono">${r.line_number ?? ''}</td>
           <td class="mono">${(r.root_cause || '').substring(0, 400)}</td>
           <td class="mono">${(r.created_at || '')}</td>
-        </tr>`).join('') || '<tr><td colspan="5">No incidents yet</td></tr>';
+        </tr>`;
+      }).join('') || '<tr><td colspan="6">No incidents yet</td></tr>';
 
       const cb = document.getElementById('context-body');
       cb.innerHTML = (ctx || []).map(r => {

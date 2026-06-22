@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import httpx
 
+_SEVERITY_EMOJI = {
+    "HIGH": ":red_circle:",
+    "MEDIUM": ":large_yellow_circle:",
+    "LOW": ":large_green_circle:",
+}
+
 
 def _truncate(text: str, limit: int = 300) -> str:
     text = str(text).strip()
@@ -17,6 +23,8 @@ def build_payload(incident: dict) -> dict:
     line_number = incident.get("line_number", "?")
     root_cause = _truncate(incident.get("root_cause") or "", 300)
     user_action = incident.get("user_action") or ""
+    severity = str(incident.get("severity") or "LOW").upper()
+    sev_emoji = _SEVERITY_EMOJI.get(severity, ":large_green_circle:")
 
     error_type = root_cause.split(":")[0].strip() if root_cause else "Error"
 
@@ -26,13 +34,18 @@ def build_payload(incident: dict) -> dict:
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": "ContextO — New Error Correlation", "emoji": True},
+            "text": {
+                "type": "plain_text",
+                "text": "ContextO — New Error Correlation",
+                "emoji": True,
+            },
         },
         {
             "type": "section",
             "fields": [
                 {"type": "mrkdwn", "text": f"*Trace ID*\n`{trace_id}`"},
                 {"type": "mrkdwn", "text": f"*File*\n{file_ref}"},
+                {"type": "mrkdwn", "text": f"*Severity*\n{sev_emoji} {severity}"},
             ],
         },
     ]
