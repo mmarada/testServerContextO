@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { usePoller } from "../hooks/usePoller.js";
 
 function errorType(root) {
@@ -25,9 +25,61 @@ function signatureKey(row) {
   return `${row.file_path}|${row.line_number}|${errorType(row.root_cause)}`;
 }
 
+function isSnoozed(row) {
+  if (!row.snoozed_until) return false;
+  return new Date(row.snoozed_until) > new Date();
+}
+
+function SnoozeButton({ incidentId, snoozedUntil, onSnooze }) {
+  const [loading, setLoading] = useState(false);
+  const isActive = snoozedUntil && new Date(snoozedUntil) > new Date();
+
+  async function handleSnooze() {
+    setLoading(true);
+    try {
+      await fetch(`/api/incidents/${incidentId}/snooze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minutes: 60 }),
+      });
+      onSnooze();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (isActive) {
+    const until = new Date(snoozedUntil).toLocaleTimeString(undefined, { hour12: false });
+    return (
+      <span className="inline-block px-1.5 py-0.5 text-[9px] border border-ctx-border text-ctx-muted bg-ctx-card whitespace-nowrap">
+        snoozed until {until}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={loading}
+      onClick={handleSnooze}
+      className="border border-ctx-border px-2 py-0.5 text-[10px] text-ctx-muted hover:bg-ctx-bg disabled:opacity-40"
+    >
+      {loading ? "…" : "Snooze 1h"}
+    </button>
+  );
+}
+
 export function Incidents({ onViewTrace }) {
   const inc = usePoller("/api/incidents", 60_000);
   const ctx = usePoller("/api/file-context", 60_000);
+  // Local snooze overrides: incidentId → snoozedUntil ISO string
+  // Applied immediately so UI reflects snooze before next poll cycle
+  const [localSnoozes, setLocalSnoozes] = useState({});
+
+  const markSnoozed = useCallback((incidentId, minutes) => {
+    const until = new Date(Date.now() + minutes * 60_000).toISOString();
+    setLocalSnoozes((prev) => ({ ...prev, [incidentId]: until }));
+  }, []);
 
   const rows = Array.isArray(inc.data) ? inc.data : [];
   const fctx = Array.isArray(ctx.data) ? ctx.data : [];
@@ -38,12 +90,17 @@ export function Incidents({ onViewTrace }) {
       const n = Array.isArray(r.generated_tests) ? r.generated_tests.length : 0;
       return acc + n;
     }, 0);
+    const snoozedCount = rows.filter((r) => {
+      const until = localSnoozes[r.incident_id] || r.snoozed_until;
+      return until && new Date(until) > new Date();
+    }).length;
     return {
       total: rows.length,
       signatures: sig.size,
       tests: testCount,
+      snoozed: snoozedCount,
     };
-  }, [rows, fctx]);
+  }, [rows, fctx, localSnoozes]);
 
   const lastCommit = useMemo(() => {
     const withSha = rows.filter((r) => r.commit_sha);
@@ -74,11 +131,12 @@ export function Incidents({ onViewTrace }) {
         </p>
       </header>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-4">
         {[
           ["Total incidents", metrics.total],
           ["Unique bug signatures", metrics.signatures],
           ["Tests generated", metrics.tests],
+          ["Snoozed", metrics.snoozed],
         ].map(([label, val]) => (
           <div
             key={label}
@@ -106,7 +164,7 @@ export function Incidents({ onViewTrace }) {
               <th className="p-2">error type</th>
               <th className="p-2">hits</th>
               <th className="p-2">timestamp</th>
-              <th className="p-2">action</th>
+              <th className="p-2">actions</th>
             </tr>
           </thead>
           <tbody>
@@ -120,8 +178,13 @@ export function Incidents({ onViewTrace }) {
             {rows.map((r) => {
               const hits =
                 fctx.find((c) => c.file_path === r.file_path)?.error_count ?? "—";
+              const effectiveSnoozedUntil = localSnoozes[r.incident_id] || r.snoozed_until;
+              const snoozed = effectiveSnoozedUntil && new Date(effectiveSnoozedUntil) > new Date();
               return (
-                <tr key={r.trace_id} className="border-b border-ctx-border">
+                <tr
+                  key={r.trace_id}
+                  className={`border-b border-ctx-border ${snoozed ? "opacity-50" : ""}`}
+                >
                   <td className="p-2 font-mono text-ctx-accent">
                     {(r.trace_id || "").slice(0, 8)}
                   </td>
@@ -134,7 +197,7 @@ export function Incidents({ onViewTrace }) {
                   <td className="p-2 text-ctx-muted">{errorType(r.root_cause)}</td>
                   <td className="p-2 text-ctx-text">{hits}</td>
                   <td className="p-2 text-ctx-muted">{r.created_at || "—"}</td>
-                  <td className="p-2">
+                  <td className="p-2 flex gap-1 flex-wrap">
                     <button
                       type="button"
                       onClick={() => onViewTrace(r.trace_id)}
@@ -142,6 +205,11 @@ export function Incidents({ onViewTrace }) {
                     >
                       View trace
                     </button>
+                    <SnoozeButton
+                      incidentId={r.incident_id}
+                      snoozedUntil={effectiveSnoozedUntil}
+                      onSnooze={() => markSnoozed(r.incident_id, 60)}
+                    />
                   </td>
                 </tr>
               );

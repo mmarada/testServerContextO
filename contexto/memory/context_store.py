@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiosqlite
@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS incident_log (
 _MIGRATE_SEVERITY = (
     "ALTER TABLE incident_log ADD COLUMN severity TEXT DEFAULT 'LOW'"
 )
+_MIGRATE_SNOOZE = (
+    "ALTER TABLE incident_log ADD COLUMN snoozed_until TEXT DEFAULT NULL"
+)
 
 
 def _utc_now_iso() -> str:
@@ -51,10 +54,11 @@ class ContextStore:
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
-            try:
-                await db.execute(_MIGRATE_SEVERITY)
-            except Exception:  # column already exists
-                pass
+            for migration in (_MIGRATE_SEVERITY, _MIGRATE_SNOOZE):
+                try:
+                    await db.execute(migration)
+                except Exception:  # column already exists
+                    pass
             await db.commit()
 
     async def upsert_file_context(
@@ -146,8 +150,8 @@ class ContextStore:
             row = await cur.fetchone()
             return row is not None
 
-    async def increment_error_count(self, file_path: str) -> None:
-        """Bump recurrence counter for a file in file_context."""
+    async def increment_error_count(self, file_path: str) -> int:
+        """Bump recurrence counter for a file in file_context; returns new count."""
         now = _utc_now_iso()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -159,6 +163,43 @@ class ContextStore:
                 (now, file_path),
             )
             await db.commit()
+            cur = await db.execute(
+                "SELECT error_count FROM file_context WHERE file_path = ?",
+                (file_path,),
+            )
+            row = await cur.fetchone()
+            return int(row[0]) if row else 1
+
+    async def snooze_incident(self, incident_id: str, minutes: int) -> bool:
+        """Set snoozed_until to now+minutes for the given incident. Returns True if found."""
+        until = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "UPDATE incident_log SET snoozed_until = ? WHERE incident_id = ?",
+                (until, incident_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def is_signature_snoozed(
+        self, file_path: str, line_number: int, error_type: str
+    ) -> bool:
+        """True if any incident for this bug signature has an active snooze."""
+        if not error_type:
+            return False
+        pattern = f"%{error_type}%"
+        now = _utc_now_iso()
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                """
+                SELECT 1 FROM incident_log
+                WHERE file_path = ? AND line_number = ? AND root_cause LIKE ?
+                  AND snoozed_until IS NOT NULL AND snoozed_until > ?
+                LIMIT 1
+                """,
+                (file_path, int(line_number), pattern, now),
+            )
+            return await cur.fetchone() is not None
 
     async def get_context_for_file(self, file_path: str) -> dict[str, Any] | None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -268,6 +309,21 @@ def read_recent_incidents_sync(db_path: str | Path, limit: int = 20) -> list[dic
             (limit,),
         )
         return [_sqlite_row_to_dict_sync(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def snooze_incident_sync(db_path: str | Path, incident_id: str, minutes: int) -> bool:
+    """Set snoozed_until on an incident (synchronous, for Flask routes)."""
+    until = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            "UPDATE incident_log SET snoozed_until = ? WHERE incident_id = ?",
+            (until, incident_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 

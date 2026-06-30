@@ -194,11 +194,29 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                             f"[ContextO] New bug signature → test generated for {fp}"
                         )
                 else:
-                    await store.increment_error_count(fp)
-                    print(
-                        "[ContextO] Known bug hit again → error_count incremented, "
-                        "no duplicate test"
+                    new_count = await store.increment_error_count(fp)
+                    snoozed = await store.is_signature_snoozed(
+                        fp, int(trace_map["line_number"]), error_type
                     )
+                    if new_count % 10 == 0 and not snoozed and settings.slack_webhook_url:
+                        reminder = dict(incident)
+                        reminder["root_cause"] = (
+                            f"[Recurrence #{new_count}] " + reminder.get("root_cause", "")
+                        )
+                        await notify_slack(settings.slack_webhook_url, reminder)
+                        print(
+                            f"[ContextO] Known bug hit #{new_count} → Slack recurrence alert sent"
+                        )
+                    elif snoozed:
+                        print(
+                            f"[ContextO] Known bug hit #{new_count} → snoozed, "
+                            "no recurrence alert"
+                        )
+                    else:
+                        print(
+                            "[ContextO] Known bug hit again → error_count incremented, "
+                            "no duplicate test"
+                        )
 
             now = time.monotonic()
             if list_commits_tool is not None and (

@@ -16,6 +16,7 @@ from contexto.memory.context_store import (
     ContextStore,
     read_all_file_contexts_sync,
     read_recent_incidents_sync,
+    snooze_incident_sync,
 )
 
 app = Flask(__name__)
@@ -273,6 +274,18 @@ def get_file_context():
 def session_events():
     """Optional session stream; empty until wired to a real source."""
     return jsonify([])
+
+
+@app.route("/api/incidents/<incident_id>/snooze", methods=["POST", "OPTIONS"])
+def snooze_incident_route(incident_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    body = request.get_json(silent=True) or {}
+    minutes = max(1, int(body.get("minutes", 60)))
+    found = snooze_incident_sync(_db_path(), incident_id, minutes)
+    if not found:
+        return jsonify({"ok": False, "error": "incident not found"}), 404
+    return jsonify({"ok": True, "incident_id": incident_id, "snoozed_minutes": minutes})
 
 
 @app.route("/api/generate-test", methods=["POST", "OPTIONS"])
