@@ -16,6 +16,7 @@ from contexto.memory.context_store import (
     ContextStore,
     read_all_file_contexts_sync,
     read_recent_incidents_sync,
+    read_recent_webhook_log_sync,
     snooze_incident_sync,
 )
 
@@ -270,6 +271,12 @@ def get_file_context():
     return jsonify(rows)
 
 
+@app.route("/api/webhook-log")
+def get_webhook_log():
+    rows = read_recent_webhook_log_sync(_db_path(), limit=50)
+    return jsonify(rows)
+
+
 @app.route("/api/session-events")
 def session_events():
     """Optional session stream; empty until wired to a real source."""
@@ -397,12 +404,27 @@ def dashboard():
       </thead>
       <tbody id="context-body"></tbody>
     </table>
+
+    <h2>Webhook delivery log</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>kind</th>
+          <th>status</th>
+          <th>trace_id</th>
+          <th>detail</th>
+          <th>sent_at</th>
+        </tr>
+      </thead>
+      <tbody id="webhook-body"></tbody>
+    </table>
   </main>
   <script>
     async function load() {
-      const [inc, ctx] = await Promise.all([
+      const [inc, ctx, hooks] = await Promise.all([
         fetch('/api/incidents').then(r => r.json()),
         fetch('/api/file-context').then(r => r.json()),
+        fetch('/api/webhook-log').then(r => r.json()),
       ]);
       const SEV_COLOR = { HIGH: '#f87171', MEDIUM: '#fbbf24', LOW: '#4ade80' };
       const ib = document.getElementById('incidents-body');
@@ -429,6 +451,18 @@ def dashboard():
           <td class="mono">${(r.updated_at || '')}</td>
         </tr>`;
       }).join('') || '<tr><td colspan="4">No file context yet</td></tr>';
+
+      const wb = document.getElementById('webhook-body');
+      wb.innerHTML = (hooks || []).map(r => {
+        const ok = !!r.success;
+        return `<tr>
+          <td class="mono">${(r.kind || '')}</td>
+          <td class="mono" style="color:${ok ? '#4ade80' : '#f87171'};font-weight:600">${ok ? 'OK' : 'FAILED'}</td>
+          <td class="mono">${(r.trace_id || '')}</td>
+          <td class="mono">${(r.detail || '')}</td>
+          <td class="mono">${(r.sent_at || '')}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="5">No webhook deliveries yet</td></tr>';
     }
     load();
     setInterval(load, 15000);

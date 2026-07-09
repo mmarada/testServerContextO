@@ -166,7 +166,14 @@ async def run_pipeline(settings: Settings | None = None) -> None:
 
                 if stored and not failure_seen_before:
                     if settings.slack_webhook_url:
-                        await notify_slack(settings.slack_webhook_url, incident)
+                        ok = await notify_slack(settings.slack_webhook_url, incident)
+                        await store.log_webhook_delivery(
+                            incident_id=incident["incident_id"],
+                            trace_id=incident["trace_id"],
+                            kind="slack:new_incident",
+                            success=ok,
+                            detail="" if ok else "non-200 response or request failed",
+                        )
                     print(f"[ContextO] pipeline: severity={incident['severity']} for {fp}")
 
                     await store.upsert_file_context(
@@ -203,7 +210,14 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                         reminder["root_cause"] = (
                             f"[Recurrence #{new_count}] " + reminder.get("root_cause", "")
                         )
-                        await notify_slack(settings.slack_webhook_url, reminder)
+                        ok = await notify_slack(settings.slack_webhook_url, reminder)
+                        await store.log_webhook_delivery(
+                            incident_id=incident["incident_id"],
+                            trace_id=incident["trace_id"],
+                            kind="slack:recurrence",
+                            success=ok,
+                            detail="" if ok else "non-200 response or request failed",
+                        )
                         print(
                             f"[ContextO] Known bug hit #{new_count} → Slack recurrence alert sent"
                         )

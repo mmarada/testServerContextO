@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS incident_log (
     severity TEXT DEFAULT 'LOW',
     created_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS webhook_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id TEXT,
+    trace_id TEXT,
+    kind TEXT NOT NULL,
+    success INTEGER NOT NULL,
+    detail TEXT,
+    sent_at TEXT
+);
 """
 
 _MIGRATE_SEVERITY = (
@@ -254,6 +264,37 @@ class ContextStore:
             rows = await cur.fetchall()
             return [_row_to_dict(r) for r in rows]
 
+    async def log_webhook_delivery(
+        self,
+        *,
+        incident_id: str | None,
+        trace_id: str | None,
+        kind: str,
+        success: bool,
+        detail: str = "",
+    ) -> None:
+        """Record a webhook send attempt (e.g. Slack) for audit purposes."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO webhook_log (
+                    incident_id, trace_id, kind, success, detail, sent_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (incident_id, trace_id, kind, 1 if success else 0, detail[:500], _utc_now_iso()),
+            )
+            await db.commit()
+
+    async def get_recent_webhook_log(self, limit: int = 20) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM webhook_log ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
     async def get_all_file_contexts(self) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -324,6 +365,20 @@ def snooze_incident_sync(db_path: str | Path, incident_id: str, minutes: int) ->
         )
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def read_recent_webhook_log_sync(db_path: str | Path, limit: int = 20) -> list[dict[str, Any]]:
+    path = str(db_path)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            "SELECT * FROM webhook_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
