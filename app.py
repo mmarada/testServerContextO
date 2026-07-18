@@ -17,6 +17,7 @@ from contexto.memory.context_store import (
     read_all_file_contexts_sync,
     read_recent_incidents_sync,
     read_recent_webhook_log_sync,
+    read_recent_webhook_retries_sync,
     snooze_incident_sync,
 )
 
@@ -277,6 +278,12 @@ def get_webhook_log():
     return jsonify(rows)
 
 
+@app.route("/api/webhook-retries")
+def get_webhook_retries():
+    rows = read_recent_webhook_retries_sync(_db_path(), limit=50)
+    return jsonify(rows)
+
+
 @app.route("/api/session-events")
 def session_events():
     """Optional session stream; empty until wired to a real source."""
@@ -418,13 +425,29 @@ def dashboard():
       </thead>
       <tbody id="webhook-body"></tbody>
     </table>
+
+    <h2>Webhook retry queue</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>kind</th>
+          <th>status</th>
+          <th>attempt</th>
+          <th>trace_id</th>
+          <th>next_attempt_at</th>
+          <th>last_error</th>
+        </tr>
+      </thead>
+      <tbody id="retry-body"></tbody>
+    </table>
   </main>
   <script>
     async function load() {
-      const [inc, ctx, hooks] = await Promise.all([
+      const [inc, ctx, hooks, retries] = await Promise.all([
         fetch('/api/incidents').then(r => r.json()),
         fetch('/api/file-context').then(r => r.json()),
         fetch('/api/webhook-log').then(r => r.json()),
+        fetch('/api/webhook-retries').then(r => r.json()),
       ]);
       const SEV_COLOR = { HIGH: '#f87171', MEDIUM: '#fbbf24', LOW: '#4ade80' };
       const ib = document.getElementById('incidents-body');
@@ -463,6 +486,21 @@ def dashboard():
           <td class="mono">${(r.sent_at || '')}</td>
         </tr>`;
       }).join('') || '<tr><td colspan="5">No webhook deliveries yet</td></tr>';
+
+      const STATUS_COLOR = { pending: '#fbbf24', succeeded: '#4ade80', exhausted: '#f87171' };
+      const rb = document.getElementById('retry-body');
+      rb.innerHTML = (retries || []).map(r => {
+        const status = r.status || 'pending';
+        const color = STATUS_COLOR[status] || STATUS_COLOR.pending;
+        return `<tr>
+          <td class="mono">${(r.kind || '')}</td>
+          <td class="mono" style="color:${color};font-weight:600">${status.toUpperCase()}</td>
+          <td class="mono">${r.attempt ?? 0}/${r.max_attempts ?? ''}</td>
+          <td class="mono">${(r.trace_id || '')}</td>
+          <td class="mono">${(r.next_attempt_at || '')}</td>
+          <td class="mono">${(r.last_error || '')}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="6">No retries queued</td></tr>';
     }
     load();
     setInterval(load, 15000);

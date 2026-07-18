@@ -43,7 +43,24 @@ CREATE TABLE IF NOT EXISTS webhook_log (
     detail TEXT,
     sent_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS webhook_retry_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id TEXT,
+    trace_id TEXT,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    attempt INTEGER DEFAULT 0,
+    max_attempts INTEGER DEFAULT 5,
+    status TEXT DEFAULT 'pending',
+    last_error TEXT,
+    next_attempt_at TEXT,
+    created_at TEXT,
+    updated_at TEXT
+);
 """
+
+_RETRY_BASE_DELAY_SECONDS = 30
 
 _MIGRATE_SEVERITY = (
     "ALTER TABLE incident_log ADD COLUMN severity TEXT DEFAULT 'LOW'"
@@ -295,6 +312,125 @@ class ContextStore:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
+    async def enqueue_webhook_retry(
+        self,
+        *,
+        incident_id: str | None,
+        trace_id: str | None,
+        kind: str,
+        payload: dict[str, Any],
+        max_attempts: int = 5,
+    ) -> None:
+        """Schedule a failed webhook delivery for retry with exponential backoff."""
+        now = _utc_now_iso()
+        next_attempt_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=_RETRY_BASE_DELAY_SECONDS)
+        ).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO webhook_retry_queue (
+                    incident_id, trace_id, kind, payload, attempt, max_attempts,
+                    status, next_attempt_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0, ?, 'pending', ?, ?, ?)
+                """,
+                (
+                    incident_id,
+                    trace_id,
+                    kind,
+                    json.dumps(payload, ensure_ascii=False),
+                    max_attempts,
+                    next_attempt_at,
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+
+    async def get_due_webhook_retries(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Pending retries whose backoff window has elapsed, oldest-due first."""
+        now = _utc_now_iso()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT * FROM webhook_retry_queue
+                WHERE status = 'pending' AND next_attempt_at <= ?
+                ORDER BY datetime(next_attempt_at) ASC
+                LIMIT ?
+                """,
+                (now, limit),
+            )
+            rows = await cur.fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                try:
+                    d["payload"] = json.loads(d["payload"])
+                except json.JSONDecodeError:
+                    d["payload"] = {}
+                result.append(d)
+            return result
+
+    async def record_webhook_retry_result(
+        self, retry_id: int, attempt: int, success: bool, *, error: str = ""
+    ) -> None:
+        """Mark a retry attempt outcome: succeeded, exhausted, or rescheduled with backoff."""
+        now = _utc_now_iso()
+        async with aiosqlite.connect(self.db_path) as db:
+            if success:
+                await db.execute(
+                    """
+                    UPDATE webhook_retry_queue
+                    SET status = 'succeeded', attempt = ?, updated_at = ?, last_error = NULL
+                    WHERE id = ?
+                    """,
+                    (attempt + 1, now, retry_id),
+                )
+                await db.commit()
+                return
+
+            cur = await db.execute(
+                "SELECT max_attempts FROM webhook_retry_queue WHERE id = ?", (retry_id,)
+            )
+            row = await cur.fetchone()
+            max_attempts = int(row[0]) if row else 5
+            new_attempt = attempt + 1
+
+            if new_attempt >= max_attempts:
+                await db.execute(
+                    """
+                    UPDATE webhook_retry_queue
+                    SET status = 'exhausted', attempt = ?, updated_at = ?, last_error = ?
+                    WHERE id = ?
+                    """,
+                    (new_attempt, now, error[:500], retry_id),
+                )
+            else:
+                delay = _RETRY_BASE_DELAY_SECONDS * (2**new_attempt)
+                next_attempt_at = (
+                    datetime.now(timezone.utc) + timedelta(seconds=delay)
+                ).isoformat()
+                await db.execute(
+                    """
+                    UPDATE webhook_retry_queue
+                    SET attempt = ?, updated_at = ?, last_error = ?, next_attempt_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_attempt, now, error[:500], next_attempt_at, retry_id),
+                )
+            await db.commit()
+
+    async def get_recent_webhook_retries(self, limit: int = 20) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM webhook_retry_queue ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
     async def get_all_file_contexts(self) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -376,6 +512,20 @@ def read_recent_webhook_log_sync(db_path: str | Path, limit: int = 20) -> list[d
     try:
         cur = conn.execute(
             "SELECT * FROM webhook_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def read_recent_webhook_retries_sync(db_path: str | Path, limit: int = 20) -> list[dict[str, Any]]:
+    path = str(db_path)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            "SELECT * FROM webhook_retry_queue ORDER BY id DESC LIMIT ?",
             (limit,),
         )
         return [dict(r) for r in cur.fetchall()]

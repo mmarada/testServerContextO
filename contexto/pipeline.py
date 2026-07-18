@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+_WEBHOOK_RETRY_INTERVAL_SECONDS = 30
+
 _vite_proc: subprocess.Popen | None = None
 
 
@@ -116,6 +118,38 @@ def _incident_row(
     }
 
 
+async def _process_webhook_retries(store: ContextStore, settings: Settings) -> None:
+    """Retry previously-failed Slack deliveries whose backoff window has elapsed."""
+    if not settings.slack_webhook_url:
+        return
+    due = await store.get_due_webhook_retries()
+    for row in due:
+        ok = await notify_slack(settings.slack_webhook_url, row["payload"])
+        await store.log_webhook_delivery(
+            incident_id=row["incident_id"],
+            trace_id=row["trace_id"],
+            kind=f"{row['kind']}:retry",
+            success=ok,
+            detail="" if ok else f"retry attempt {row['attempt'] + 1} failed",
+        )
+        await store.record_webhook_retry_result(
+            row["id"],
+            row["attempt"],
+            ok,
+            error="" if ok else "delivery failed",
+        )
+        if ok:
+            print(
+                f"[ContextO] pipeline: webhook retry succeeded "
+                f"(trace_id={row['trace_id']}, attempt={row['attempt'] + 1})"
+            )
+        else:
+            print(
+                f"[ContextO] pipeline: webhook retry failed "
+                f"(trace_id={row['trace_id']}, attempt={row['attempt'] + 1})"
+            )
+
+
 async def run_pipeline(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     store = ContextStore(settings.db_path)
@@ -123,6 +157,7 @@ async def run_pipeline(settings: Settings | None = None) -> None:
 
     seen_trace_ids: set[str] = set()
     last_commit_poll = 0.0
+    last_webhook_retry_poll = 0.0
     mcp_client = build_mcp_client()
     llm = ChatGoogleGenerativeAI(
         model=settings.llm_model,
@@ -174,6 +209,13 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                             success=ok,
                             detail="" if ok else "non-200 response or request failed",
                         )
+                        if not ok:
+                            await store.enqueue_webhook_retry(
+                                incident_id=incident["incident_id"],
+                                trace_id=incident["trace_id"],
+                                kind="slack:new_incident",
+                                payload=incident,
+                            )
                     print(f"[ContextO] pipeline: severity={incident['severity']} for {fp}")
 
                     await store.upsert_file_context(
@@ -218,6 +260,13 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                             success=ok,
                             detail="" if ok else "non-200 response or request failed",
                         )
+                        if not ok:
+                            await store.enqueue_webhook_retry(
+                                incident_id=incident["incident_id"],
+                                trace_id=incident["trace_id"],
+                                kind="slack:recurrence",
+                                payload=reminder,
+                            )
                         print(
                             f"[ContextO] Known bug hit #{new_count} → Slack recurrence alert sent"
                         )
@@ -241,6 +290,10 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                 new_commits = await watcher.poll(list_commits_tool)
                 for sha in new_commits:
                     await run_commit_guard(sha, mcp_client, store, settings)
+
+            if now - last_webhook_retry_poll >= float(_WEBHOOK_RETRY_INTERVAL_SECONDS):
+                last_webhook_retry_poll = now
+                await _process_webhook_retries(store, settings)
 
         except Exception as e:  # noqa: BLE001
             print(f"[ContextO] pipeline: loop error: {e!r}")
