@@ -18,6 +18,7 @@ from contexto.memory.context_store import (
     read_recent_incidents_sync,
     read_recent_webhook_log_sync,
     read_recent_webhook_retries_sync,
+    retry_webhook_now_sync,
     snooze_incident_sync,
 )
 
@@ -284,6 +285,16 @@ def get_webhook_retries():
     return jsonify(rows)
 
 
+@app.route("/api/webhook-retries/<int:retry_id>/retry-now", methods=["POST", "OPTIONS"])
+def retry_webhook_now_route(retry_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    found = retry_webhook_now_sync(_db_path(), retry_id)
+    if not found:
+        return jsonify({"ok": False, "error": "retry row not found or not exhausted"}), 404
+    return jsonify({"ok": True, "retry_id": retry_id, "status": "pending"})
+
+
 @app.route("/api/session-events")
 def session_events():
     """Optional session stream; empty until wired to a real source."""
@@ -436,6 +447,7 @@ def dashboard():
           <th>trace_id</th>
           <th>next_attempt_at</th>
           <th>last_error</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="retry-body"></tbody>
@@ -492,6 +504,9 @@ def dashboard():
       rb.innerHTML = (retries || []).map(r => {
         const status = r.status || 'pending';
         const color = STATUS_COLOR[status] || STATUS_COLOR.pending;
+        const action = status === 'exhausted'
+          ? `<button class="mono" onclick="retryNow(${r.id})">Retry now</button>`
+          : '';
         return `<tr>
           <td class="mono">${(r.kind || '')}</td>
           <td class="mono" style="color:${color};font-weight:600">${status.toUpperCase()}</td>
@@ -499,8 +514,13 @@ def dashboard():
           <td class="mono">${(r.trace_id || '')}</td>
           <td class="mono">${(r.next_attempt_at || '')}</td>
           <td class="mono">${(r.last_error || '')}</td>
+          <td>${action}</td>
         </tr>`;
-      }).join('') || '<tr><td colspan="6">No retries queued</td></tr>';
+      }).join('') || '<tr><td colspan="7">No retries queued</td></tr>';
+    }
+    async function retryNow(retryId) {
+      await fetch(`/api/webhook-retries/${retryId}/retry-now`, { method: 'POST' });
+      load();
     }
     load();
     setInterval(load, 15000);

@@ -505,6 +505,33 @@ def snooze_incident_sync(db_path: str | Path, incident_id: str, minutes: int) ->
         conn.close()
 
 
+def retry_webhook_now_sync(db_path: str | Path, retry_id: int) -> bool:
+    """Force an exhausted retry row back to 'pending' with next_attempt_at=now.
+
+    Only exhausted rows are eligible — pending/succeeded rows are left alone so
+    this can't be used to jump the backoff queue. max_attempts is bumped by one
+    so the forced attempt still goes through record_webhook_retry_result's
+    normal max_attempts check: one more real send, and if it fails the row goes
+    back to exhausted rather than looping forever.
+    """
+    now = _utc_now_iso()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            """
+            UPDATE webhook_retry_queue
+            SET status = 'pending', next_attempt_at = ?, updated_at = ?,
+                max_attempts = max_attempts + 1
+            WHERE id = ? AND status = 'exhausted'
+            """,
+            (now, now, retry_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def read_recent_webhook_log_sync(db_path: str | Path, limit: int = 20) -> list[dict[str, Any]]:
     path = str(db_path)
     conn = sqlite3.connect(path)
