@@ -513,10 +513,24 @@ def retry_webhook_now_sync(db_path: str | Path, retry_id: int) -> bool:
     so the forced attempt still goes through record_webhook_retry_result's
     normal max_attempts check: one more real send, and if it fails the row goes
     back to exhausted rather than looping forever.
+
+    The forcing action itself is logged to webhook_log with a ':manual_retry'
+    kind suffix (mirroring the existing ':retry' suffix used for automatic
+    retries) so the dashboard audit trail shows when/what was manually forced,
+    distinct from the actual send outcome that record_webhook_retry_result
+    logs once the forced attempt runs on the next pipeline tick.
     """
     now = _utc_now_iso()
     conn = sqlite3.connect(str(db_path))
     try:
+        row = conn.execute(
+            "SELECT incident_id, trace_id, kind FROM webhook_retry_queue WHERE id = ? AND status = 'exhausted'",
+            (retry_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        incident_id, trace_id, kind = row
+
         cur = conn.execute(
             """
             UPDATE webhook_retry_queue
@@ -526,6 +540,22 @@ def retry_webhook_now_sync(db_path: str | Path, retry_id: int) -> bool:
             """,
             (now, now, retry_id),
         )
+        if cur.rowcount > 0:
+            conn.execute(
+                """
+                INSERT INTO webhook_log (
+                    incident_id, trace_id, kind, success, detail, sent_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    incident_id,
+                    trace_id,
+                    f"{kind}:manual_retry",
+                    1,
+                    f"retry #{retry_id} manually forced from dashboard",
+                    now,
+                ),
+            )
         conn.commit()
         return cur.rowcount > 0
     finally:

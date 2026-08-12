@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from contexto.memory.context_store import ContextStore, read_recent_webhook_retries_sync
+from contexto.memory.context_store import (
+    ContextStore,
+    read_recent_webhook_retries_sync,
+    read_recent_webhook_log_sync,
+    retry_webhook_now_sync,
+)
 
 
 @pytest.fixture()
@@ -123,3 +128,55 @@ def test_payload_round_trips_through_due_query(store):
     due = asyncio.run(store.get_due_webhook_retries())
     assert len(due) == 1
     assert due[0]["payload"] == payload
+
+
+def test_retry_now_logs_manual_audit_entry(store):
+    asyncio.run(
+        store.enqueue_webhook_retry(
+            incident_id="inc-1",
+            trace_id="trace-1",
+            kind="slack:new_incident",
+            payload={"trace_id": "trace-1"},
+            max_attempts=1,
+        )
+    )
+    rows = read_recent_webhook_retries_sync(store.db_path)
+    retry_id = rows[0]["id"]
+
+    # Exhaust it so it's eligible for retry_webhook_now_sync.
+    asyncio.run(store.record_webhook_retry_result(retry_id, 0, False, error="boom"))
+    rows = read_recent_webhook_retries_sync(store.db_path)
+    assert rows[0]["status"] == "exhausted"
+
+    ok = retry_webhook_now_sync(store.db_path, retry_id)
+    assert ok is True
+
+    rows = read_recent_webhook_retries_sync(store.db_path)
+    assert rows[0]["status"] == "pending"
+    assert rows[0]["max_attempts"] == 2
+
+    log = read_recent_webhook_log_sync(store.db_path)
+    manual_entries = [r for r in log if r["kind"] == "slack:new_incident:manual_retry"]
+    assert len(manual_entries) == 1
+    assert manual_entries[0]["success"] == 1
+    assert manual_entries[0]["trace_id"] == "trace-1"
+    assert str(retry_id) in manual_entries[0]["detail"]
+
+
+def test_retry_now_no_op_on_non_exhausted_row(store):
+    asyncio.run(
+        store.enqueue_webhook_retry(
+            incident_id="inc-1",
+            trace_id="trace-1",
+            kind="slack:new_incident",
+            payload={"trace_id": "trace-1"},
+        )
+    )
+    rows = read_recent_webhook_retries_sync(store.db_path)
+    retry_id = rows[0]["id"]
+
+    ok = retry_webhook_now_sync(store.db_path, retry_id)
+    assert ok is False
+
+    log = read_recent_webhook_log_sync(store.db_path)
+    assert log == []
