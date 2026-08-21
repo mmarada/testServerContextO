@@ -562,6 +562,29 @@ def retry_webhook_now_sync(db_path: str | Path, retry_id: int) -> bool:
         conn.close()
 
 
+def count_recent_manual_retries_sync(db_path: str | Path, hours: int = 168) -> int:
+    """Count ':manual_retry' webhook_log rows within the last `hours`.
+
+    Counts the forcing action itself (logged by retry_webhook_now_sync), not
+    the eventual send outcome, so this reflects how often someone reached for
+    the dashboard's "Retry now" button rather than how many of those retries
+    ultimately succeeded.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            """
+            SELECT COUNT(*) FROM webhook_log
+            WHERE kind LIKE '%:manual_retry' AND sent_at >= ?
+            """,
+            (since,),
+        )
+        return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
 def read_recent_webhook_log_sync(db_path: str | Path, limit: int = 20) -> list[dict[str, Any]]:
     path = str(db_path)
     conn = sqlite3.connect(path)

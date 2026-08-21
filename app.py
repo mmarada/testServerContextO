@@ -14,6 +14,7 @@ from flask import Flask, jsonify, render_template_string, request
 
 from contexto.memory.context_store import (
     ContextStore,
+    count_recent_manual_retries_sync,
     read_all_file_contexts_sync,
     read_recent_incidents_sync,
     read_recent_webhook_log_sync,
@@ -285,6 +286,12 @@ def get_webhook_retries():
     return jsonify(rows)
 
 
+@app.route("/api/webhook-log/manual-retry-count")
+def get_manual_retry_count():
+    count = count_recent_manual_retries_sync(_db_path(), hours=168)
+    return jsonify({"count": count, "window_hours": 168})
+
+
 @app.route("/api/webhook-retries/<int:retry_id>/retry-now", methods=["POST", "OPTIONS"])
 def retry_webhook_now_route(retry_id):
     if request.method == "OPTIONS":
@@ -423,7 +430,7 @@ def dashboard():
       <tbody id="context-body"></tbody>
     </table>
 
-    <h2>Webhook delivery log</h2>
+    <h2>Webhook delivery log <span class="pill" id="manual-retry-count">manual retries (7d): …</span></h2>
     <table>
       <thead>
         <tr>
@@ -455,12 +462,15 @@ def dashboard():
   </main>
   <script>
     async function load() {
-      const [inc, ctx, hooks, retries] = await Promise.all([
+      const [inc, ctx, hooks, retries, manualRetries] = await Promise.all([
         fetch('/api/incidents').then(r => r.json()),
         fetch('/api/file-context').then(r => r.json()),
         fetch('/api/webhook-log').then(r => r.json()),
         fetch('/api/webhook-retries').then(r => r.json()),
+        fetch('/api/webhook-log/manual-retry-count').then(r => r.json()),
       ]);
+      document.getElementById('manual-retry-count').textContent =
+        `manual retries (7d): ${manualRetries.count ?? 0}`;
       const SEV_COLOR = { HIGH: '#f87171', MEDIUM: '#fbbf24', LOW: '#4ade80' };
       const ib = document.getElementById('incidents-body');
       ib.innerHTML = (inc || []).map(r => {
