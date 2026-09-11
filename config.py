@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     commit_poll_interval: int = Field(
         default=60, validation_alias="COMMIT_POLL_INTERVAL"
     )
+    recurrence_alert_interval: int = Field(
+        default=10, validation_alias="RECURRENCE_ALERT_INTERVAL"
+    )
     llm_model: str = Field(default="gemini-3.1-flash-lite-preview", validation_alias="LLM_MODEL")
     google_api_key: str = Field(validation_alias="GOOGLE_API_KEY")
     db_path: str = Field(default="contexto.db", validation_alias="DB_PATH")

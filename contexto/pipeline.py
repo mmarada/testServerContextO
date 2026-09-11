@@ -96,6 +96,18 @@ def _error_type_from_event(error: dict[str, Any]) -> str:
     return msg.split(":", 1)[0].strip()
 
 
+def _recurrence_alert_due(new_count: int, interval: int) -> bool:
+    """True when a known-bug hit count lands on a recurrence-alert milestone.
+
+    ``interval`` comes from RECURRENCE_ALERT_INTERVAL (default 10). A value of
+    0 or less disables recurrence alerts entirely rather than raising on the
+    modulo.
+    """
+    if interval <= 0:
+        return False
+    return new_count % interval == 0
+
+
 def _incident_row(
     trace_map: dict[str, Any],
     error: dict[str, Any],
@@ -247,7 +259,13 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                     snoozed = await store.is_signature_snoozed(
                         fp, int(trace_map["line_number"]), error_type
                     )
-                    if new_count % 10 == 0 and not snoozed and settings.slack_webhook_url:
+                    if (
+                        _recurrence_alert_due(
+                            new_count, settings.recurrence_alert_interval
+                        )
+                        and not snoozed
+                        and settings.slack_webhook_url
+                    ):
                         reminder = dict(incident)
                         reminder["root_cause"] = (
                             f"[Recurrence #{new_count}] " + reminder.get("root_cause", "")

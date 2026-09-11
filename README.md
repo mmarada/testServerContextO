@@ -30,6 +30,7 @@ pip install -r requirements.txt
 - `GITHUB_PERSONAL_ACCESS_TOKEN` (or `GITHUB_PERSONAL_TOKEN`) — fine-scoped PAT for MCP GitHub server
 - Optional: `LOG_SOURCE_URL` (default `http://127.0.0.1:5000/api/logs`), `POLL_INTERVAL`, `COMMIT_POLL_INTERVAL`, `DB_PATH`, `LLM_MODEL`
 - Optional: `SLACK_WEBHOOK_URL` — Slack Incoming Webhook URL; when set, a Block Kit notification is posted for every new unique bug signature correlated
+- Optional: `RECURRENCE_ALERT_INTERVAL` (default `10`) — a Slack recurrence alert fires every Nth time a known bug re-occurs; set to `0` to disable recurrence alerts entirely
 
 3. Start the demo app (terminal 1):
 
