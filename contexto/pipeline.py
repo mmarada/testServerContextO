@@ -164,7 +164,11 @@ async def _process_webhook_retries(store: ContextStore, settings: Settings) -> N
 
 async def run_pipeline(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
-    store = ContextStore(settings.db_path)
+    store = ContextStore(
+        settings.db_path,
+        retry_base_delay_seconds=settings.retry_base_delay_seconds,
+        retry_max_attempts=settings.retry_max_attempts,
+    )
     await store.init()
 
     seen_trace_ids: set[str] = set()

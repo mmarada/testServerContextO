@@ -31,6 +31,7 @@ pip install -r requirements.txt
 - Optional: `LOG_SOURCE_URL` (default `http://127.0.0.1:5000/api/logs`), `POLL_INTERVAL`, `COMMIT_POLL_INTERVAL`, `DB_PATH`, `LLM_MODEL`
 - Optional: `SLACK_WEBHOOK_URL` — Slack Incoming Webhook URL; when set, a Block Kit notification is posted for every new unique bug signature correlated
 - Optional: `RECURRENCE_ALERT_INTERVAL` (default `10`) — a Slack recurrence alert fires every Nth time a known bug re-occurs; set to `0` to disable recurrence alerts entirely
+- Optional: `RETRY_BASE_DELAY_SECONDS` (default `30`), `RETRY_MAX_ATTEMPTS` (default `5`) — backoff/attempt-cap for the failed-webhook retry queue; delay doubles each attempt (`RETRY_BASE_DELAY_SECONDS * 2^attempt`)
 
 3. Start the demo app (terminal 1):
 

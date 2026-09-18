@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS webhook_retry_queue (
 """
 
 _RETRY_BASE_DELAY_SECONDS = 30
+_RETRY_MAX_ATTEMPTS = 5
 
 _MIGRATE_SEVERITY = (
     "ALTER TABLE incident_log ADD COLUMN severity TEXT DEFAULT 'LOW'"
@@ -75,8 +76,16 @@ def _utc_now_iso() -> str:
 
 
 class ContextStore:
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        retry_base_delay_seconds: int = _RETRY_BASE_DELAY_SECONDS,
+        retry_max_attempts: int = _RETRY_MAX_ATTEMPTS,
+    ) -> None:
         self.db_path = db_path
+        self.retry_base_delay_seconds = retry_base_delay_seconds
+        self.retry_max_attempts = retry_max_attempts
 
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -319,12 +328,15 @@ class ContextStore:
         trace_id: str | None,
         kind: str,
         payload: dict[str, Any],
-        max_attempts: int = 5,
+        max_attempts: int | None = None,
     ) -> None:
         """Schedule a failed webhook delivery for retry with exponential backoff."""
+        if max_attempts is None:
+            max_attempts = self.retry_max_attempts
         now = _utc_now_iso()
         next_attempt_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=_RETRY_BASE_DELAY_SECONDS)
+            datetime.now(timezone.utc)
+            + timedelta(seconds=self.retry_base_delay_seconds)
         ).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -394,7 +406,7 @@ class ContextStore:
                 "SELECT max_attempts FROM webhook_retry_queue WHERE id = ?", (retry_id,)
             )
             row = await cur.fetchone()
-            max_attempts = int(row[0]) if row else 5
+            max_attempts = int(row[0]) if row else self.retry_max_attempts
             new_attempt = attempt + 1
 
             if new_attempt >= max_attempts:
@@ -407,7 +419,7 @@ class ContextStore:
                     (new_attempt, now, error[:500], retry_id),
                 )
             else:
-                delay = _RETRY_BASE_DELAY_SECONDS * (2**new_attempt)
+                delay = self.retry_base_delay_seconds * (2**new_attempt)
                 next_attempt_at = (
                     datetime.now(timezone.utc) + timedelta(seconds=delay)
                 ).isoformat()

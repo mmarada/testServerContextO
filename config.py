@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     recurrence_alert_interval: int = Field(
         default=10, validation_alias="RECURRENCE_ALERT_INTERVAL"
     )
+    retry_base_delay_seconds: int = Field(
+        default=30, validation_alias="RETRY_BASE_DELAY_SECONDS"
+    )
+    retry_max_attempts: int = Field(
+        default=5, validation_alias="RETRY_MAX_ATTEMPTS"
+    )
     llm_model: str = Field(default="gemini-3.1-flash-lite-preview", validation_alias="LLM_MODEL")
     google_api_key: str = Field(validation_alias="GOOGLE_API_KEY")
     db_path: str = Field(default="contexto.db", validation_alias="DB_PATH")
