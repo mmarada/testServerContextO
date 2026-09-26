@@ -71,9 +71,78 @@ def build_payload(incident: dict) -> dict:
     return {"blocks": blocks}
 
 
+_DIGEST_MAX_LINES = 15
+
+
+def build_digest_payload(incidents: list[dict], window_hours: int) -> dict:
+    """Build one Block Kit message summarising held-back LOW incidents.
+
+    Incidents are grouped by file so a noisy file reads as one line with a
+    count instead of N near-identical entries. Output is capped at
+    _DIGEST_MAX_LINES files with an "…and K more" tail so a large backlog can't
+    push the section past Slack's 3000-char mrkdwn limit.
+    """
+    by_file: dict[str, list[dict]] = {}
+    for inc in incidents:
+        by_file.setdefault(inc.get("file_path") or "unknown", []).append(inc)
+    ordered = sorted(by_file.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+
+    lines = []
+    for fp, rows in ordered[:_DIGEST_MAX_LINES]:
+        latest = rows[-1]
+        cause = _truncate(latest.get("root_cause") or "", 120)
+        count = f" ×{len(rows)}" if len(rows) > 1 else ""
+        lines.append(
+            f"• `{fp}:{latest.get('line_number', '?')}`{count} — {cause}"
+        )
+    if len(ordered) > _DIGEST_MAX_LINES:
+        lines.append(f"_…and {len(ordered) - _DIGEST_MAX_LINES} more files_")
+
+    n = len(incidents)
+    summary = (
+        f"{_SEVERITY_EMOJI['LOW']} *{n} low-severity "
+        f"{'incident' if n == 1 else 'incidents'}* across {len(by_file)} "
+        f"{'file' if len(by_file) == 1 else 'files'} "
+        f"(batched every {window_hours}h)"
+    )
+
+    return {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "ContextO — LOW Severity Digest",
+                    "emoji": True,
+                },
+            },
+            {"type": "section", "text": {"type": "mrkdwn", "text": summary}},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "\n".join(lines)[:2900]},
+            },
+            {"type": "divider"},
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "HIGH/MEDIUM incidents still alert immediately. "
+                        "Set LOW_DIGEST_INTERVAL_HOURS=0 to alert on LOW too.",
+                    }
+                ],
+            },
+        ]
+    }
+
+
 async def notify_slack(webhook_url: str, incident: dict) -> bool:
     """POST a Slack notification for a new incident. Returns True on success."""
-    payload = build_payload(incident)
+    return await post_slack_payload(webhook_url, build_payload(incident))
+
+
+async def post_slack_payload(webhook_url: str, payload: dict) -> bool:
+    """POST a prebuilt Block Kit payload. Returns True on success."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(webhook_url, json=payload)

@@ -14,6 +14,7 @@ from flask import Flask, jsonify, render_template_string, request
 
 from contexto.memory.context_store import (
     ContextStore,
+    count_pending_digest_sync,
     count_recent_manual_retries_sync,
     read_all_file_contexts_sync,
     read_recent_incidents_sync,
@@ -292,6 +293,12 @@ def get_manual_retry_count():
     return jsonify({"count": count, "window_hours": 168})
 
 
+@app.route("/api/incidents/digest-pending-count")
+def get_digest_pending_count():
+    count = count_pending_digest_sync(_db_path())
+    return jsonify({"count": count})
+
+
 @app.route("/api/webhook-retries/<int:retry_id>/retry-now", methods=["POST", "OPTIONS"])
 def retry_webhook_now_route(retry_id):
     if request.method == "OPTIONS":
@@ -402,7 +409,7 @@ def dashboard():
     <p class="sub">Recent incidents and per-file memory from SQLite</p>
   </header>
   <main>
-    <h2>Recent incidents</h2>
+    <h2>Recent incidents <span class="pill" id="digest-pending-count">held for LOW digest: …</span></h2>
     <table>
       <thead>
         <tr>
@@ -462,13 +469,16 @@ def dashboard():
   </main>
   <script>
     async function load() {
-      const [inc, ctx, hooks, retries, manualRetries] = await Promise.all([
+      const [inc, ctx, hooks, retries, manualRetries, digestPending] = await Promise.all([
         fetch('/api/incidents').then(r => r.json()),
         fetch('/api/file-context').then(r => r.json()),
         fetch('/api/webhook-log').then(r => r.json()),
         fetch('/api/webhook-retries').then(r => r.json()),
         fetch('/api/webhook-log/manual-retry-count').then(r => r.json()),
+        fetch('/api/incidents/digest-pending-count').then(r => r.json()),
       ]);
+      document.getElementById('digest-pending-count').textContent =
+        `held for LOW digest: ${digestPending.count ?? 0}`;
       document.getElementById('manual-retry-count').textContent =
         `manual retries (7d): ${manualRetries.count ?? 0}`;
       const SEV_COLOR = { HIGH: '#f87171', MEDIUM: '#fbbf24', LOW: '#4ade80' };

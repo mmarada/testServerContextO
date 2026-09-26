@@ -32,6 +32,7 @@ pip install -r requirements.txt
 - Optional: `SLACK_WEBHOOK_URL` — Slack Incoming Webhook URL; when set, a Block Kit notification is posted for every new unique bug signature correlated
 - Optional: `RECURRENCE_ALERT_INTERVAL` (default `10`) — a Slack recurrence alert fires every Nth time a known bug re-occurs; set to `0` to disable recurrence alerts entirely
 - Optional: `RETRY_BASE_DELAY_SECONDS` (default `30`), `RETRY_MAX_ATTEMPTS` (default `5`) — backoff/attempt-cap for the failed-webhook retry queue; delay doubles each attempt (`RETRY_BASE_DELAY_SECONDS * 2^attempt`)
+- Optional: `LOW_DIGEST_INTERVAL_HOURS` (default `0` = off) — when > 0, new LOW-severity incidents skip the per-incident Slack alert and are batched into one digest message every N hours (e.g. `24` for daily); HIGH/MEDIUM still alert immediately. Digest sends are logged to the webhook delivery log as `slack:low_digest`, and the dashboard shows how many incidents are currently held
 
 3. Start the demo app (terminal 1):
 

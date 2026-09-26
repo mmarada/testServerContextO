@@ -7,6 +7,7 @@ import atexit
 import os
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,8 +84,12 @@ from contexto.agents.test_generator import (
     run_test_generator,
 )
 from contexto.ingestion.commit_watcher import CommitWatcher
-from contexto.memory.context_store import ContextStore
-from contexto.notifications.slack_notifier import notify_slack
+from contexto.memory.context_store import LOW_DIGEST_KIND, ContextStore
+from contexto.notifications.slack_notifier import (
+    build_digest_payload,
+    notify_slack,
+    post_slack_payload,
+)
 from contexto.severity import classify as classify_severity
 from live_agent import build_mcp_client, run_tracer
 
@@ -106,6 +111,85 @@ def _recurrence_alert_due(new_count: int, interval: int) -> bool:
     if interval <= 0:
         return False
     return new_count % interval == 0
+
+
+def _low_digest_due(
+    now: datetime,
+    *,
+    oldest_pending_at: datetime | None,
+    last_success_at: datetime | None,
+    last_attempt_at: datetime | None,
+    consecutive_failures: int,
+    interval_hours: int,
+    retry_base_delay_seconds: int,
+) -> bool:
+    """True when the held-back LOW incidents should be sent as one digest.
+
+    A digest goes out ``interval_hours`` after whichever is later: the last
+    successful digest, or the oldest incident still waiting. Anchoring on the
+    oldest pending incident means a quiet week followed by one LOW error still
+    waits a full window for company instead of firing instantly.
+
+    After a failed send, retries back off exponentially from
+    ``retry_base_delay_seconds`` (the same base the webhook retry queue uses),
+    capped at one window so a long Slack outage can't delay past the next
+    scheduled digest.
+
+    ``interval_hours <= 0`` means the digest is off; anything still queued from
+    when it was on is flushed right away so it can't be stranded.
+    """
+    if oldest_pending_at is None:
+        return False
+    window = timedelta(hours=max(interval_hours, 0))
+    if consecutive_failures > 0 and last_attempt_at is not None:
+        backoff = timedelta(
+            seconds=retry_base_delay_seconds * 2 ** (consecutive_failures - 1)
+        )
+        return now - last_attempt_at >= min(backoff, window or timedelta(hours=1))
+    baseline = oldest_pending_at
+    if last_success_at is not None and last_success_at > baseline:
+        baseline = last_success_at
+    return now - baseline >= window
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
+async def _process_low_digest(store: ContextStore, settings: Settings) -> None:
+    """Send one Slack message covering every LOW incident held back since the last digest."""
+    if not settings.slack_webhook_url:
+        return
+    pending = await store.get_pending_digest_incidents()
+    if not pending:
+        return
+    state = await store.get_digest_delivery_state()
+    if not _low_digest_due(
+        datetime.now(timezone.utc),
+        oldest_pending_at=_parse_iso(pending[0]["digest_queued_at"]),
+        last_success_at=_parse_iso(state["last_success_at"]),
+        last_attempt_at=_parse_iso(state["last_attempt_at"]),
+        consecutive_failures=state["consecutive_failures"],
+        interval_hours=settings.low_digest_interval_hours,
+        retry_base_delay_seconds=settings.retry_base_delay_seconds,
+    ):
+        return
+
+    payload = build_digest_payload(pending, settings.low_digest_interval_hours)
+    ok = await post_slack_payload(settings.slack_webhook_url, payload)
+    await store.log_webhook_delivery(
+        incident_id=None,
+        trace_id=None,
+        kind=LOW_DIGEST_KIND,
+        success=ok,
+        detail=f"{len(pending)} LOW incidents"
+        + ("" if ok else " (send failed; will retry with backoff)"),
+    )
+    if ok:
+        await store.mark_incidents_digested([r["incident_id"] for r in pending])
+        print(f"[ContextO] pipeline: LOW digest sent ({len(pending)} incidents)")
+    else:
+        print(f"[ContextO] pipeline: LOW digest failed ({len(pending)} incidents held)")
 
 
 def _incident_row(
@@ -216,7 +300,18 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                     continue
 
                 if stored and not failure_seen_before:
-                    if settings.slack_webhook_url:
+                    hold_for_digest = (
+                        settings.slack_webhook_url
+                        and settings.low_digest_interval_hours > 0
+                        and incident["severity"] == "LOW"
+                    )
+                    if hold_for_digest:
+                        await store.queue_incident_for_digest(incident["incident_id"])
+                        print(
+                            f"[ContextO] pipeline: LOW incident held for "
+                            f"{settings.low_digest_interval_hours}h digest"
+                        )
+                    elif settings.slack_webhook_url:
                         ok = await notify_slack(settings.slack_webhook_url, incident)
                         await store.log_webhook_delivery(
                             incident_id=incident["incident_id"],
@@ -316,6 +411,7 @@ async def run_pipeline(settings: Settings | None = None) -> None:
             if now - last_webhook_retry_poll >= float(_WEBHOOK_RETRY_INTERVAL_SECONDS):
                 last_webhook_retry_poll = now
                 await _process_webhook_retries(store, settings)
+                await _process_low_digest(store, settings)
 
         except Exception as e:  # noqa: BLE001
             print(f"[ContextO] pipeline: loop error: {e!r}")

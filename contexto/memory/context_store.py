@@ -69,6 +69,14 @@ _MIGRATE_SEVERITY = (
 _MIGRATE_SNOOZE = (
     "ALTER TABLE incident_log ADD COLUMN snoozed_until TEXT DEFAULT NULL"
 )
+_MIGRATE_DIGEST_QUEUED = (
+    "ALTER TABLE incident_log ADD COLUMN digest_queued_at TEXT DEFAULT NULL"
+)
+_MIGRATE_DIGESTED = (
+    "ALTER TABLE incident_log ADD COLUMN digested_at TEXT DEFAULT NULL"
+)
+
+LOW_DIGEST_KIND = "slack:low_digest"
 
 
 def _utc_now_iso() -> str:
@@ -90,7 +98,12 @@ class ContextStore:
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
-            for migration in (_MIGRATE_SEVERITY, _MIGRATE_SNOOZE):
+            for migration in (
+                _MIGRATE_SEVERITY,
+                _MIGRATE_SNOOZE,
+                _MIGRATE_DIGEST_QUEUED,
+                _MIGRATE_DIGESTED,
+            ):
                 try:
                     await db.execute(migration)
                 except Exception:  # column already exists
@@ -443,6 +456,70 @@ class ContextStore:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
+    async def queue_incident_for_digest(self, incident_id: str) -> None:
+        """Hold an incident back from immediate Slack delivery for the LOW digest."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE incident_log SET digest_queued_at = ? WHERE incident_id = ?",
+                (_utc_now_iso(), incident_id),
+            )
+            await db.commit()
+
+    async def get_pending_digest_incidents(self) -> list[dict[str, Any]]:
+        """Incidents queued for the digest that haven't been delivered yet, oldest first."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT * FROM incident_log
+                WHERE digest_queued_at IS NOT NULL AND digested_at IS NULL
+                ORDER BY digest_queued_at ASC
+                """
+            )
+            rows = await cur.fetchall()
+            return [_row_to_dict(r) for r in rows]
+
+    async def mark_incidents_digested(self, incident_ids: list[str]) -> None:
+        if not incident_ids:
+            return
+        now = _utc_now_iso()
+        placeholders = ",".join("?" for _ in incident_ids)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f"UPDATE incident_log SET digested_at = ? "
+                f"WHERE incident_id IN ({placeholders}) AND digested_at IS NULL",
+                (now, *incident_ids),
+            )
+            await db.commit()
+
+    async def get_digest_delivery_state(self) -> dict[str, Any]:
+        """Summarise past digest sends from webhook_log.
+
+        webhook_log is the single source of truth for when the last digest went
+        out, so the schedule survives pipeline restarts without a separate
+        state table. Returns last_success_at, last_attempt_at and the number of
+        consecutive failures since the last success (used for backoff).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT MAX(sent_at) FROM webhook_log WHERE kind = ? AND success = 1",
+                (LOW_DIGEST_KIND,),
+            )
+            last_success_at = (await cur.fetchone())[0]
+            cur = await db.execute(
+                """
+                SELECT COUNT(*), MAX(sent_at) FROM webhook_log
+                WHERE kind = ? AND success = 0 AND sent_at > ?
+                """,
+                (LOW_DIGEST_KIND, last_success_at or ""),
+            )
+            failures, last_failure_at = await cur.fetchone()
+        return {
+            "last_success_at": last_success_at,
+            "last_attempt_at": last_failure_at or last_success_at,
+            "consecutive_failures": int(failures or 0),
+        }
+
     async def get_all_file_contexts(self) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -591,6 +668,21 @@ def count_recent_manual_retries_sync(db_path: str | Path, hours: int = 168) -> i
             WHERE kind LIKE '%:manual_retry' AND sent_at >= ?
             """,
             (since,),
+        )
+        return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
+def count_pending_digest_sync(db_path: str | Path) -> int:
+    """Number of incidents currently held back for the next LOW digest."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            """
+            SELECT COUNT(*) FROM incident_log
+            WHERE digest_queued_at IS NOT NULL AND digested_at IS NULL
+            """
         )
         return cur.fetchone()[0]
     finally:
