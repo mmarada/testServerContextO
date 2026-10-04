@@ -90,6 +90,7 @@ from contexto.notifications.slack_notifier import (
     notify_slack,
     post_slack_payload,
 )
+from contexto.severity import SeverityPolicy, load_policy
 from contexto.severity import classify as classify_severity
 from live_agent import build_mcp_client, run_tracer
 
@@ -196,10 +197,11 @@ def _incident_row(
     trace_map: dict[str, Any],
     error: dict[str, Any],
     error_count: int = 0,
+    severity_policy: SeverityPolicy | None = None,
 ) -> dict[str, Any]:
     fp = trace_map["file_path"]
     error_type = _error_type_from_event(error)
-    severity = classify_severity(fp, error_count, error_type)
+    severity = classify_severity(fp, error_count, error_type, severity_policy)
     return {
         "incident_id": trace_map["incident_id"],
         "trace_id": trace_map["trace_id"],
@@ -248,6 +250,13 @@ async def _process_webhook_retries(store: ContextStore, settings: Settings) -> N
 
 async def run_pipeline(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
+    # Load before anything else so a bad rules file fails fast at startup.
+    severity_policy = load_policy(settings.severity_rules_path)
+    if settings.severity_rules_path:
+        print(
+            f"[ContextO] pipeline: severity rules from {settings.severity_rules_path} "
+            f"({len(severity_policy.rules)} rules)"
+        )
     store = ContextStore(
         settings.db_path,
         retry_base_delay_seconds=settings.retry_base_delay_seconds,
@@ -293,7 +302,9 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                 )
                 existing_ctx = await store.get_context_for_file(fp)
                 current_error_count = int((existing_ctx or {}).get("error_count", 0))
-                incident = _incident_row(trace_map, error, current_error_count)
+                incident = _incident_row(
+                    trace_map, error, current_error_count, severity_policy
+                )
                 stored = await store.log_incident(incident)
                 if not stored:
                     print(f"[ContextO] pipeline: incident trace_id={tid} already in DB; skipping")

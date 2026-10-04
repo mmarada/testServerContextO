@@ -33,6 +33,7 @@ pip install -r requirements.txt
 - Optional: `RECURRENCE_ALERT_INTERVAL` (default `10`) — a Slack recurrence alert fires every Nth time a known bug re-occurs; set to `0` to disable recurrence alerts entirely
 - Optional: `RETRY_BASE_DELAY_SECONDS` (default `30`), `RETRY_MAX_ATTEMPTS` (default `5`) — backoff/attempt-cap for the failed-webhook retry queue; delay doubles each attempt (`RETRY_BASE_DELAY_SECONDS * 2^attempt`)
 - Optional: `LOW_DIGEST_INTERVAL_HOURS` (default `0` = off) — when > 0, new LOW-severity incidents skip the per-incident Slack alert and are batched into one digest message every N hours (e.g. `24` for daily); HIGH/MEDIUM still alert immediately. Digest sends are logged to the webhook delivery log as `slack:low_digest`, and the dashboard shows how many incidents are currently held
+- Optional: `SEVERITY_RULES_PATH` — YAML file overriding severity per file-path glob (see `severity_rules.example.yaml`). Each rule sets a `severity` floor and/or `max_severity` ceiling; first match wins, and a rule's `severity` floor replaces the built-in money/auth keyword check for that file. `high_count_threshold` / `medium_count_threshold` (defaults `5` / `2`) tune hit-count escalation. The file is validated at pipeline startup, so a typo fails loudly instead of mis-ranking incidents
 
 3. Start the demo app (terminal 1):
 

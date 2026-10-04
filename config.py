@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     low_digest_interval_hours: int = Field(
         default=0, validation_alias="LOW_DIGEST_INTERVAL_HOURS"
     )
+    severity_rules_path: str = Field(
+        default="", validation_alias="SEVERITY_RULES_PATH"
+    )
     llm_model: str = Field(default="gemini-3.1-flash-lite-preview", validation_alias="LLM_MODEL")
     google_api_key: str = Field(validation_alias="GOOGLE_API_KEY")
     db_path: str = Field(default="contexto.db", validation_alias="DB_PATH")

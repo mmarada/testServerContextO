@@ -1,0 +1,21 @@
+# Copy to severity_rules.yaml and set SEVERITY_RULES_PATH=severity_rules.yaml.
+# First matching rule wins. A rule's `severity` floor replaces the built-in
+# money/auth keyword check (billing, payment, pricing, auth, ...) for that
+# file; `max_severity` caps whatever the final result would have been.
+
+high_count_threshold: 5    # hits before any incident escalates to HIGH
+medium_count_threshold: 2  # hits before any incident escalates to MEDIUM
+
+rules:
+  # Reporting is customer-facing for this team: never below MEDIUM.
+  - pattern: "report_engine.py"
+    severity: MEDIUM
+
+  # Archive jobs are batch and retried nightly: cap them so they only
+  # ever land in the LOW digest, however often they fail.
+  - pattern: "archive_service.py"
+    max_severity: LOW
+
+  # Test fixtures that happen to contain "auth" in the name.
+  - pattern: "tests/*"
+    max_severity: LOW
