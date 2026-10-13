@@ -25,6 +25,10 @@ def build_payload(incident: dict) -> dict:
     user_action = incident.get("user_action") or ""
     severity = str(incident.get("severity") or "LOW").upper()
     sev_emoji = _SEVERITY_EMOJI.get(severity, ":large_green_circle:")
+    severity_text = f"*Severity*\n{sev_emoji} {severity}"
+    severity_reason = incident.get("severity_reason")
+    if severity_reason:
+        severity_text += f"\n_{_truncate(severity_reason, 150)}_"
 
     error_type = root_cause.split(":")[0].strip() if root_cause else "Error"
 
@@ -45,7 +49,7 @@ def build_payload(incident: dict) -> dict:
             "fields": [
                 {"type": "mrkdwn", "text": f"*Trace ID*\n`{trace_id}`"},
                 {"type": "mrkdwn", "text": f"*File*\n{file_ref}"},
-                {"type": "mrkdwn", "text": f"*Severity*\n{sev_emoji} {severity}"},
+                {"type": "mrkdwn", "text": severity_text},
             ],
         },
     ]

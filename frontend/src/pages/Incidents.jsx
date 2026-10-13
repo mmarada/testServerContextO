@@ -12,12 +12,20 @@ const SEV_STYLES = {
   LOW: "border border-green-500/60 text-green-400 bg-green-500/10",
 };
 
-function SeverityBadge({ severity }) {
+function SeverityBadge({ severity, reason }) {
   const s = (severity || "LOW").toUpperCase();
   return (
-    <span className={`inline-block px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${SEV_STYLES[s] || SEV_STYLES.LOW}`}>
-      {s}
-    </span>
+    <>
+      <span
+        title={reason || undefined}
+        className={`inline-block px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${SEV_STYLES[s] || SEV_STYLES.LOW}`}
+      >
+        {s}
+      </span>
+      {reason && (
+        <div className="mt-0.5 max-w-[16rem] text-[9px] leading-tight text-ctx-muted">{reason}</div>
+      )}
+    </>
   );
 }
 
@@ -189,7 +197,7 @@ export function Incidents({ onViewTrace }) {
                     {(r.trace_id || "").slice(0, 8)}
                   </td>
                   <td className="p-2">
-                    <SeverityBadge severity={r.severity} />
+                    <SeverityBadge severity={r.severity} reason={r.severity_reason} />
                   </td>
                   <td className="p-2 text-ctx-text">
                     {r.file_path}:{r.line_number}

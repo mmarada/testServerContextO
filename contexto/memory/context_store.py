@@ -75,6 +75,9 @@ _MIGRATE_DIGEST_QUEUED = (
 _MIGRATE_DIGESTED = (
     "ALTER TABLE incident_log ADD COLUMN digested_at TEXT DEFAULT NULL"
 )
+_MIGRATE_SEVERITY_REASON = (
+    "ALTER TABLE incident_log ADD COLUMN severity_reason TEXT DEFAULT NULL"
+)
 
 LOW_DIGEST_KIND = "slack:low_digest"
 
@@ -103,6 +106,7 @@ class ContextStore:
                 _MIGRATE_SNOOZE,
                 _MIGRATE_DIGEST_QUEUED,
                 _MIGRATE_DIGESTED,
+                _MIGRATE_SEVERITY_REASON,
             ):
                 try:
                     await db.execute(migration)
@@ -268,8 +272,9 @@ class ContextStore:
                     """
                     INSERT INTO incident_log (
                         incident_id, trace_id, commit_sha, user_action, log_trace,
-                        file_path, line_number, root_cause, severity, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        file_path, line_number, root_cause, severity,
+                        severity_reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         incident_dict["incident_id"],
@@ -281,6 +286,7 @@ class ContextStore:
                         int(incident_dict["line_number"]),
                         incident_dict.get("root_cause", ""),
                         incident_dict.get("severity", "LOW"),
+                        incident_dict.get("severity_reason"),
                         incident_dict.get("created_at", _utc_now_iso()),
                     ),
                 )

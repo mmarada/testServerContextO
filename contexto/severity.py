@@ -76,11 +76,15 @@ class SeverityPolicy:
     medium_count_threshold: int = MEDIUM_THRESHOLD
 
     def match(self, file_path: str) -> SeverityRule | None:
+        return self.match_with_index(file_path)[1]
+
+    def match_with_index(self, file_path: str) -> tuple[int, SeverityRule | None]:
+        """Return (index, rule) of the first matching rule, or (-1, None)."""
         normalized = (file_path or "").replace("\\", "/").lower()
-        for rule in self.rules:
+        for i, rule in enumerate(self.rules):
             if rule.matches(normalized):
-                return rule
-        return None
+                return i, rule
+        return -1, None
 
 
 DEFAULT_POLICY = SeverityPolicy()
@@ -179,25 +183,58 @@ def classify(
     ``max_severity`` ceiling clamps the final result. A ceiling-only rule keeps
     the keyword floor, so capping a billing file at MEDIUM yields MEDIUM.
     """
+    return explain(file_path, error_count, error_type, policy)[0]
+
+
+def explain(
+    file_path: str,
+    error_count: int,
+    error_type: str,
+    policy: SeverityPolicy | None = None,
+) -> tuple[str, str]:
+    """Like classify(), but also return a one-line reason naming what decided it.
+
+    The reason names the single deciding factor — the matched rule (by its
+    ``rules[i]`` index and pattern, same numbering as validation errors), the
+    critical-path keyword, the hit-count threshold, or the error type — so
+    "why is this LOW?" can be answered from Slack or the dashboard without
+    reading the rules file. When the floor and the hit-count signal agree, the
+    floor is credited, since it would hold even on a first occurrence.
+    """
     policy = policy or DEFAULT_POLICY
-    rule = policy.match(file_path)
+    index, rule = policy.match_with_index(file_path)
+    rule_ref = f'rules[{index}] "{rule.pattern}"' if rule is not None else ""
 
     if rule is not None and rule.severity is not None:
-        floor = rule.severity
+        floor, floor_why = rule.severity, f"{rule_ref} sets floor {rule.severity}"
     else:
         fp_lower = (file_path or "").lower()
-        floor = "HIGH" if any(kw in fp_lower for kw in _CRITICAL_FILE_KEYWORDS) else "LOW"
+        keyword = next((kw for kw in _CRITICAL_FILE_KEYWORDS if kw in fp_lower), None)
+        if keyword:
+            floor, floor_why = "HIGH", f"critical path keyword '{keyword}'"
+        else:
+            floor, floor_why = "LOW", ""
 
+    error_type = error_type or ""
     if error_count >= policy.high_count_threshold:
         computed = "HIGH"
-    elif error_count >= policy.medium_count_threshold or any(
-        (error_type or "").startswith(e) for e in _COMMON_RUNTIME_ERRORS
-    ):
+        computed_why = f"file seen {error_count}x (>= {policy.high_count_threshold})"
+    elif error_count >= policy.medium_count_threshold:
         computed = "MEDIUM"
+        computed_why = f"file seen {error_count}x (>= {policy.medium_count_threshold})"
+    elif any(error_type.startswith(e) for e in _COMMON_RUNTIME_ERRORS):
+        computed, computed_why = "MEDIUM", f"{error_type} is a common runtime error"
     else:
-        computed = "LOW"
+        computed, computed_why = "LOW", ""
 
-    result = max(floor, computed, key=_RANK.__getitem__)
+    if _RANK[floor] >= _RANK[computed]:
+        result, why = floor, floor_why
+    else:
+        result, why = computed, computed_why
+    why = why or "no critical keyword, rule, or repeat hits"
+
     if rule is not None and rule.max_severity is not None:
-        result = min(result, rule.max_severity, key=_RANK.__getitem__)
-    return result
+        if _RANK[result] > _RANK[rule.max_severity]:
+            why = f"{rule_ref} caps at {rule.max_severity} (would be {result}: {why})"
+            result = rule.max_severity
+    return result, why

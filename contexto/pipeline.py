@@ -91,7 +91,7 @@ from contexto.notifications.slack_notifier import (
     post_slack_payload,
 )
 from contexto.severity import SeverityPolicy, load_policy
-from contexto.severity import classify as classify_severity
+from contexto.severity import explain as explain_severity
 from live_agent import build_mcp_client, run_tracer
 
 
@@ -201,7 +201,9 @@ def _incident_row(
 ) -> dict[str, Any]:
     fp = trace_map["file_path"]
     error_type = _error_type_from_event(error)
-    severity = classify_severity(fp, error_count, error_type, severity_policy)
+    severity, severity_reason = explain_severity(
+        fp, error_count, error_type, severity_policy
+    )
     return {
         "incident_id": trace_map["incident_id"],
         "trace_id": trace_map["trace_id"],
@@ -212,6 +214,7 @@ def _incident_row(
         "line_number": int(trace_map["line_number"]),
         "root_cause": trace_map.get("root_cause", ""),
         "severity": severity,
+        "severity_reason": severity_reason,
         "created_at": trace_map.get("created_at") or error.get("timestamp"),
     }
 
@@ -338,7 +341,10 @@ async def run_pipeline(settings: Settings | None = None) -> None:
                                 kind="slack:new_incident",
                                 payload=incident,
                             )
-                    print(f"[ContextO] pipeline: severity={incident['severity']} for {fp}")
+                    print(
+                        f"[ContextO] pipeline: severity={incident['severity']} for {fp} "
+                        f"({incident['severity_reason']})"
+                    )
 
                     await store.upsert_file_context(
                         fp,

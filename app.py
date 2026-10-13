@@ -393,6 +393,7 @@ def dashboard():
     th { color: var(--muted); font-weight: 600; background: #131820; }
     tr:last-child td { border-bottom: none; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.8rem; }
+    .why { color: var(--muted); font-size: 0.7rem; font-weight: 400; max-width: 22rem; white-space: normal; }
     .pill {
       display: inline-block;
       padding: 0.1rem 0.45rem;
@@ -482,13 +483,17 @@ def dashboard():
       document.getElementById('manual-retry-count').textContent =
         `manual retries (7d): ${manualRetries.count ?? 0}`;
       const SEV_COLOR = { HIGH: '#f87171', MEDIUM: '#fbbf24', LOW: '#4ade80' };
+      const esc = s => String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
       const ib = document.getElementById('incidents-body');
       ib.innerHTML = (inc || []).map(r => {
         const sev = (r.severity || 'LOW').toUpperCase();
         const color = SEV_COLOR[sev] || SEV_COLOR.LOW;
         return `<tr>
           <td class="mono">${(r.trace_id || '')}</td>
-          <td class="mono" style="color:${color};font-weight:600">${sev}</td>
+          <td class="mono"><span style="color:${color};font-weight:600">${sev}</span>${
+            r.severity_reason ? `<div class="why">${esc(r.severity_reason)}</div>` : ''}</td>
           <td class="mono">${(r.file_path || '')}</td>
           <td class="mono">${r.line_number ?? ''}</td>
           <td class="mono">${(r.root_cause || '').substring(0, 400)}</td>
