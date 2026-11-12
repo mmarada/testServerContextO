@@ -238,3 +238,76 @@ def explain(
             why = f"{rule_ref} caps at {rule.max_severity} (would be {result}: {why})"
             result = rule.max_severity
     return result, why
+
+
+class PolicyReloader:
+    """Serve the current SEVERITY_RULES_PATH policy, re-reading it when it changes.
+
+    The pipeline asks for ``current()`` once per poll tick. That costs one
+    ``stat()``: the file is only re-parsed when its (mtime_ns, size, inode)
+    signature differs from the last one tried, so editors that save by
+    atomic rename (new inode, same second) are still picked up.
+
+    Startup stays strict — the constructor raises on a bad file, exactly like
+    ``load_policy`` — but a bad edit *at runtime* never takes the pipeline
+    down or silently reverts to the built-in keyword policy: the last policy
+    that validated keeps serving, and the error is reported once per bad
+    revision of the file (not once per tick). Deleting the file is treated
+    the same way. Fixing the file is picked up on the next tick.
+    """
+
+    def __init__(self, path: str | None, *, log=print) -> None:
+        self.path = path or ""
+        self._log = log
+        self.policy = load_policy(self.path)
+        self.reloads = 0
+        self.last_error: str | None = None
+        self._attempted_sig = self._signature()
+
+    def _signature(self) -> tuple[int, int, int] | None:
+        if not self.path:
+            return None
+        try:
+            st = Path(self.path).stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+    def current(self) -> SeverityPolicy:
+        if not self.path:
+            return self.policy
+        sig = self._signature()
+        if sig == self._attempted_sig:
+            return self.policy
+        self._attempted_sig = sig
+
+        if sig is None:
+            self.last_error = f"{self.path} is missing"
+            self._log(
+                f"[ContextO] severity rules: {self.path} is missing; "
+                f"keeping last good policy ({len(self.policy.rules)} rules)"
+            )
+            return self.policy
+        try:
+            new_policy = load_policy(self.path)
+        except Exception as e:  # noqa: BLE001 — YAML errors aren't ValueErrors
+            self.last_error = str(e)
+            self._log(
+                f"[ContextO] severity rules: reload of {self.path} rejected ({e}); "
+                f"keeping last good policy ({len(self.policy.rules)} rules)"
+            )
+            return self.policy
+
+        self.last_error = None
+        if new_policy == self.policy:
+            self._log(f"[ContextO] severity rules: {self.path} touched, rules unchanged")
+            return self.policy
+        old_count = len(self.policy.rules)
+        self.policy = new_policy
+        self.reloads += 1
+        self._log(
+            f"[ContextO] severity rules: reloaded {self.path} "
+            f"({old_count} -> {len(new_policy.rules)} rules, thresholds "
+            f"HIGH>={new_policy.high_count_threshold} MEDIUM>={new_policy.medium_count_threshold})"
+        )
+        return self.policy

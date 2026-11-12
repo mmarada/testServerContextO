@@ -90,7 +90,7 @@ from contexto.notifications.slack_notifier import (
     notify_slack,
     post_slack_payload,
 )
-from contexto.severity import SeverityPolicy, load_policy
+from contexto.severity import PolicyReloader, SeverityPolicy
 from contexto.severity import explain as explain_severity
 from live_agent import build_mcp_client, run_tracer
 
@@ -254,11 +254,13 @@ async def _process_webhook_retries(store: ContextStore, settings: Settings) -> N
 async def run_pipeline(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     # Load before anything else so a bad rules file fails fast at startup.
-    severity_policy = load_policy(settings.severity_rules_path)
+    # Edits to the rules file are picked up on the next tick; a bad edit keeps
+    # the last good policy instead of crashing or falling back to defaults.
+    severity_rules = PolicyReloader(settings.severity_rules_path)
     if settings.severity_rules_path:
         print(
             f"[ContextO] pipeline: severity rules from {settings.severity_rules_path} "
-            f"({len(severity_policy.rules)} rules)"
+            f"({len(severity_rules.policy.rules)} rules, hot-reload on change)"
         )
     store = ContextStore(
         settings.db_path,
@@ -289,6 +291,7 @@ async def run_pipeline(settings: Settings | None = None) -> None:
 
     while True:
         try:
+            severity_policy = severity_rules.current()
             logs = await poll_logs(settings.log_source_url)
             new_errors = [l for l in logs if l.get("trace_id") and l["trace_id"] not in seen_trace_ids]
 
